@@ -1,8 +1,9 @@
+import hashlib
 import os
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .config import AuthConfig
@@ -20,6 +21,7 @@ def create_auth_router(
     app_name: str = "App",
     app_url: str | None = None,
     config: AuthConfig | None = None,
+    ApiKey=None,
 ):
     """Factory that creates an auth router with login, verify, logout routes."""
     config = config or AuthConfig()
@@ -124,5 +126,71 @@ def create_auth_router(
         response = RedirectResponse(url="/auth/login", status_code=303)
         response.delete_cookie(key=COOKIE_NAME)
         return response
+
+    if ApiKey is not None:
+
+        @router.post("/api-key-login")
+        async def api_key_login(request: Request):
+            """Authenticate via API key and create a session cookie.
+
+            Accepts JSON {"api_key": "gbox_pk_..."} or form data api_key=gbox_pk_...
+            Returns JSON with redirect URL on success.
+            """
+            content_type = request.headers.get("content-type", "")
+            if "application/json" in content_type:
+                body = await request.json()
+                raw_key = body.get("api_key", "")
+            else:
+                form = await request.form()
+                raw_key = form.get("api_key", "")
+
+            if not raw_key:
+                return JSONResponse(
+                    status_code=400,
+                    content={"detail": "api_key is required"},
+                )
+
+            key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+
+            db = next(get_db())
+            try:
+                api_key = (
+                    db.query(ApiKey)
+                    .filter(ApiKey.key_hash == key_hash, ApiKey.revoked_at.is_(None))
+                    .first()
+                )
+                if api_key is None:
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Invalid or revoked API key"},
+                    )
+
+                user = db.query(User).filter(User.id == api_key.user_id).first()
+                if user is None or not user.is_active:
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "User not found or inactive"},
+                    )
+
+                from datetime import datetime, timezone
+
+                api_key.last_used_at = datetime.now(timezone.utc)
+                db.commit()
+
+                session_token = session_manager.create_session(user.id)
+                response = JSONResponse(
+                    status_code=200,
+                    content={"detail": "Authenticated", "redirect": "/"},
+                )
+                response.set_cookie(
+                    key=COOKIE_NAME,
+                    value=session_token,
+                    max_age=session_manager.max_age,
+                    httponly=True,
+                    samesite="lax",
+                )
+                return response
+            finally:
+                db.close()
 
     return router

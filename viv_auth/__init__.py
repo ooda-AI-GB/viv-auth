@@ -25,15 +25,19 @@ def init_auth(
     app_name: str = "App",
     app_url: str | None = None,
     config: AuthConfig | None = None,
+    enable_api_keys: bool = False,
 ):
     """Initialize viv-auth on a FastAPI app.
 
     Returns (User, require_auth) — the User model and a FastAPI dependency.
+
+    When enable_api_keys=True, the api_keys table is created and the auth
+    chain gains a per-user API key step (Bearer gbox_pk_xxx).
     """
     config = config or AuthConfig()
 
     # Create models
-    User, MagicToken = create_auth_models(Base)
+    User, MagicToken, ApiKey = create_auth_models(Base)
 
     # Session manager
     secret = os.environ.get("SESSION_SECRET")
@@ -51,11 +55,15 @@ def init_auth(
         app_name=app_name,
         app_url=app_url,
         config=config,
+        ApiKey=ApiKey if enable_api_keys else None,
     )
     app.include_router(router)
 
     # require_auth dependency
-    require_auth = create_require_auth(get_db, User, session_manager)
+    require_auth = create_require_auth(
+        get_db, User, session_manager,
+        ApiKey=ApiKey if enable_api_keys else None,
+    )
 
     # Exception handler for NotAuthenticated
     @app.exception_handler(NotAuthenticated)
@@ -67,6 +75,7 @@ def init_auth(
     # Create tables
     Base.metadata.create_all(bind=engine)
 
-    logger.info(f"[viv-auth] Initialized for '{app_name}' — signup={'on' if config.allow_signup else 'off'}")
+    api_keys_status = "api-keys=on" if enable_api_keys else "api-keys=off"
+    logger.info(f"[viv-auth] Initialized for '{app_name}' — signup={'on' if config.allow_signup else 'off'}, {api_keys_status}")
 
     return User, require_auth
