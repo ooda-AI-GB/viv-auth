@@ -36,9 +36,9 @@ def create_auth_router(
     @router.get("/login", response_class=HTMLResponse)
     async def login_page(request: Request, error: str | None = None):
         return templates.TemplateResponse(
+            request,
             "auth/login.html",
             {
-                "request": request,
                 "app_name": app_name,
                 "error": error,
                 "enable_api_keys": ApiKey is not None,
@@ -54,8 +54,9 @@ def create_auth_router(
             if user is None:
                 if not config.allow_signup:
                     return templates.TemplateResponse(
+                        request,
                         "auth/error.html",
-                        {"request": request, "app_name": app_name, "message": "Account not found."},
+                        {"app_name": app_name, "message": "Account not found."},
                     )
                 user = User(email=email)
                 db.add(user)
@@ -74,8 +75,9 @@ def create_auth_router(
             send_magic_link(email, magic_url, app_name, from_email)
 
             return templates.TemplateResponse(
+                request,
                 "auth/check_email.html",
-                {"request": request, "app_name": app_name, "email": email},
+                {"app_name": app_name, "email": email},
             )
         finally:
             db.close()
@@ -88,9 +90,9 @@ def create_auth_router(
 
             if magic_token is None or not magic_token.is_valid():
                 return templates.TemplateResponse(
+                    request,
                     "auth/error.html",
                     {
-                        "request": request,
                         "app_name": app_name,
                         "message": "This link is invalid or has expired.",
                     },
@@ -101,9 +103,9 @@ def create_auth_router(
                 user = db.query(User).filter(User.id == magic_token.user_id).first()
                 if user and not user.is_active:
                     return templates.TemplateResponse(
+                        request,
                         "auth/error.html",
                         {
-                            "request": request,
                             "app_name": app_name,
                             "message": "Account is deactivated.",
                         },
