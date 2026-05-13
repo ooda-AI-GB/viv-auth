@@ -37,7 +37,12 @@ def create_auth_router(
     async def login_page(request: Request, error: str | None = None):
         return templates.TemplateResponse(
             "auth/login.html",
-            {"request": request, "app_name": app_name, "error": error},
+            {
+                "request": request,
+                "app_name": app_name,
+                "error": error,
+                "enable_api_keys": ApiKey is not None,
+            },
         )
 
     @router.post("/login", response_class=HTMLResponse)
@@ -134,9 +139,10 @@ def create_auth_router(
             """Authenticate via API key and create a session cookie.
 
             Accepts JSON {"api_key": "gbox_pk_..."} or form data api_key=gbox_pk_...
-            Returns JSON with redirect URL on success.
+            Form submissions redirect to /. JSON requests return JSON.
             """
             content_type = request.headers.get("content-type", "")
+            is_form = "application/x-www-form-urlencoded" in content_type
             if "application/json" in content_type:
                 body = await request.json()
                 raw_key = body.get("api_key", "")
@@ -145,6 +151,11 @@ def create_auth_router(
                 raw_key = form.get("api_key", "")
 
             if not raw_key:
+                if is_form:
+                    return RedirectResponse(
+                        url="/auth/login?error=API+key+is+required",
+                        status_code=303,
+                    )
                 return JSONResponse(
                     status_code=400,
                     content={"detail": "api_key is required"},
@@ -160,6 +171,11 @@ def create_auth_router(
                     .first()
                 )
                 if api_key is None:
+                    if is_form:
+                        return RedirectResponse(
+                            url="/auth/login?error=Invalid+or+revoked+API+key",
+                            status_code=303,
+                        )
                     return JSONResponse(
                         status_code=401,
                         content={"detail": "Invalid or revoked API key"},
@@ -167,6 +183,11 @@ def create_auth_router(
 
                 user = db.query(User).filter(User.id == api_key.user_id).first()
                 if user is None or not user.is_active:
+                    if is_form:
+                        return RedirectResponse(
+                            url="/auth/login?error=User+not+found+or+inactive",
+                            status_code=303,
+                        )
                     return JSONResponse(
                         status_code=401,
                         content={"detail": "User not found or inactive"},
@@ -178,10 +199,14 @@ def create_auth_router(
                 db.commit()
 
                 session_token = session_manager.create_session(user.id)
-                response = JSONResponse(
-                    status_code=200,
-                    content={"detail": "Authenticated", "redirect": "/"},
-                )
+
+                if is_form:
+                    response = RedirectResponse(url="/", status_code=303)
+                else:
+                    response = JSONResponse(
+                        status_code=200,
+                        content={"detail": "Authenticated", "redirect": "/"},
+                    )
                 response.set_cookie(
                     key=COOKIE_NAME,
                     value=session_token,
