@@ -68,6 +68,8 @@ def _check_api_key_bearer(request, db, User, ApiKey):
     api_key.last_used_at = datetime.now(timezone.utc)
     db.commit()
 
+    # Refresh user so attributes survive session close (commit expires objects)
+    db.refresh(user)
     return user
 
 
